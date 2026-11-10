@@ -1,0 +1,277 @@
+name: Build FPP Finder mobile
+
+# Android: release-signed APK (sideloadable).
+# iOS:     UNSIGNED .ipa (AltStore / Sideloadly re-sign it) + simulator .app zip.
+# See mobile/README.md for install steps and what is / is not verified.
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+    paths: ['mobile/**', '.github/workflows/mobile.yml']
+  pull_request:
+    paths: ['mobile/**', '.github/workflows/mobile.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  FLUTTER_VERSION: '3.47.9'
+  JAVA_VERSION: '17'
+
+defaults:
+  run:
+    working-directory: mobile
+
+jobs:
+  test:
+    name: Analyze + unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: flutter analyze
+      - run: flutter test
+
+  android:
+    name: Android APK (release-signed)
+    needs: test
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - name: App version
+        id: ver
+        run: |
+          echo "version=$(sed -n 's/^version: *\([0-9.]*\).*/\1/p' pubspec.yaml)" >> "$GITHUB_OUTPUT"
+
+      # The project's release keystore lives in GitHub Actions secrets
+      # (ANDROID_KEYSTORE_BASE64 / _PASSWORD / ANDROID_KEY_ALIAS / _PASSWORD) so every
+      # build is signed with the SAME key and can update an installed copy.
+      # Forks and pull requests have no secrets: they get a throw-away keystore
+      # generated here, which still yields an installable (but not updatable) APK.
+      - name: Prepare signing key
+        id: key
+        env:
+          KS_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASS: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -e
+          if [ -n "$KS_B64" ]; then
+            echo "Using the project keystore from repository secrets"
+            echo "$KS_B64" | base64 -d > android/release.p12
+            echo "source=secrets" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::No signing secrets available (fork/PR): generating a throw-away keystore"
+            KS_PASS=$(openssl rand -hex 16); KEY_PASS=$KS_PASS; KEY_ALIAS=ci-temp
+            echo "::add-mask::$KS_PASS"
+            keytool -genkeypair -keystore android/release.p12 -storetype pkcs12 \
+              -alias "$KEY_ALIAS" -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=FPP Finder CI (temporary)" -storepass "$KS_PASS" -keypass "$KEY_PASS"
+            echo "source=ephemeral" >> "$GITHUB_OUTPUT"
+          fi
+          {
+            echo "storeFile=release.p12"
+            echo "storeType=pkcs12"
+            echo "keyAlias=$KEY_ALIAS"
+            echo "storePassword=$KS_PASS"
+            echo "keyPassword=$KEY_PASS"
+          } > android/key.properties
+
+      - run: flutter pub get
+      - name: Build release APK
+        run: flutter build apk --release
+      - name: Name + checksum
+        run: |
+          set -e
+          mkdir -p dist
+          cp build/app/outputs/flutter-apk/app-release.apk "dist/fpp-finder-${{ steps.ver.outputs.version }}-android.apk"
+          cd dist && sha256sum *.apk | tee SHA256SUMS-android.txt
+
+      - name: Verify the APK (signature, manifest, permissions)
+        run: |
+          set -e
+          APK="dist/fpp-finder-${{ steps.ver.outputs.version }}-android.apk"
+          BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          echo "== build-tools: $BT"
+          "$BT/apksigner" verify --verbose --print-certs "$APK" | tee dist/apksigner.txt
+          grep -q "Verifies" dist/apksigner.txt
+          grep -q "v2 scheme (APK Signature Scheme v2): true" dist/apksigner.txt
+          if grep -qi "Android Debug" dist/apksigner.txt; then echo "::error::APK is signed with the debug key"; exit 1; fi
+          "$BT/aapt2" dump badging "$APK" > dist/badging.txt
+          grep -E "^package:|sdkVersion|targetSdkVersion|application-label:|uses-permission" dist/badging.txt
+          grep -q "name='dev.fppfinder.fpp_finder'" dist/badging.txt
+          grep -q "uses-permission: name='android.permission.INTERNET'" dist/badging.txt
+          grep -q "uses-permission: name='android.permission.ACCESS_WIFI_STATE'" dist/badging.txt
+          grep -q "uses-permission: name='android.permission.CHANGE_WIFI_MULTICAST_STATE'" dist/badging.txt
+          "$BT/aapt2" dump xmltree "$APK" --file AndroidManifest.xml | grep -E "usesCleartextTraffic|networkSecurityConfig"
+          unzip -l "$APK" | grep -E "lib/(arm64-v8a|armeabi-v7a|x86_64)/libapp.so|assets/flutter_assets/assets/oui-data.json|network_security_config"
+          ls -l "$APK"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fpp-finder-android
+          path: |
+            mobile/dist/*.apk
+            mobile/dist/SHA256SUMS-android.txt
+            mobile/dist/apksigner.txt
+            mobile/dist/badging.txt
+          if-no-files-found: error
+
+  android-emulator:
+    name: Android emulator smoke test
+    needs: android
+    runs-on: ubuntu-latest
+    # Informational: emulators on shared runners are occasionally flaky.
+    continue-on-error: true
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: fpp-finder-android
+          path: apk
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      # A fake FPP on the runner's port 80. From inside the emulator the runner is
+      # 10.0.2.2, which is inside the emulator's own 10.0.2.0/24 subnet, so the app's
+      # normal sweep + FPP probe should find it.
+      - name: Start fake FPP (recorded FPP 5.4.1 responses, GET only)
+        run: |
+          sudo nohup python3 mobile/tool/fake_fpp.py mobile/test/fixtures 80 > fake_fpp.log 2>&1 &
+          sleep 2; curl -s http://127.0.0.1/api/fppd/version
+      - name: Install, launch, screenshot
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          target: google_apis
+          profile: pixel_6
+          disable-animations: true
+          script: |
+            adb install -r apk/fpp-finder-*-android.apk
+            adb logcat -c
+            adb shell am start -n dev.fppfinder.fpp_finder/.MainActivity
+            sleep 45
+            adb exec-out screencap -p > emulator-screenshot.png
+            adb shell uiautomator dump /sdcard/ui.xml || true
+            adb pull /sdcard/ui.xml ui.xml || true
+            adb logcat -d > logcat.txt || true
+            adb shell pidof dev.fppfinder.fpp_finder
+      - name: Check results
+        run: |
+          set -x
+          cat fake_fpp.log
+          ! grep -q "UNEXPECTED" fake_fpp.log
+          ! grep -q "FATAL EXCEPTION" logcat.txt
+          grep -q "GET /api/fppd/version" fake_fpp.log
+          grep -q "GET /api/network/interface" fake_fpp.log
+          grep -o '5\.4\.1\|BeagleBone\|pixelselect' ui.xml | sort -u
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: android-emulator-smoke
+          path: |
+            emulator-screenshot.png
+            ui.xml
+            logcat.txt
+            fake_fpp.log
+
+  ios:
+    name: iOS (unsigned .ipa + simulator .app)
+    needs: test
+    runs-on: macos-latest
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - name: App version
+        id: ver
+        run: |
+          echo "version=$(sed -n 's/^version: *\([0-9.]*\).*/\1/p' pubspec.yaml)" >> "$GITHUB_OUTPUT"
+      - run: flutter pub get
+      - name: Build device app (no code signing)
+        run: flutter build ios --release --no-codesign
+      - name: Package unsigned .ipa
+        run: |
+          set -e
+          V=${{ steps.ver.outputs.version }}
+          mkdir -p dist ipa/Payload
+          cp -R build/ios/iphoneos/Runner.app ipa/Payload/Runner.app
+          (cd ipa && zip -qry "../dist/fpp-finder-$V-ios-unsigned.ipa" Payload)
+          unzip -l "dist/fpp-finder-$V-ios-unsigned.ipa" | head -20
+      - name: Verify the .ipa (structure, plist, architecture, unsigned)
+        run: |
+          set -e
+          V=${{ steps.ver.outputs.version }}
+          rm -rf /tmp/ipacheck && mkdir /tmp/ipacheck && cd /tmp/ipacheck
+          unzip -q "$GITHUB_WORKSPACE/mobile/dist/fpp-finder-$V-ios-unsigned.ipa"
+          APP=Payload/Runner.app
+          test -d "$APP/Frameworks/App.framework"
+          test -d "$APP/Frameworks/Flutter.framework"
+          plutil -p "$APP/Info.plist" | grep -E "CFBundleIdentifier|CFBundleDisplayName|CFBundleShortVersionString|MinimumOSVersion|NSLocalNetworkUsageDescription|NSAllowsLocalNetworking|_fppd._udp|_http._tcp"
+          plutil -extract NSLocalNetworkUsageDescription raw "$APP/Info.plist"
+          plutil -extract NSAppTransportSecurity.NSAllowsLocalNetworking raw "$APP/Info.plist" | grep -q true
+          plutil -extract NSBonjourServices.0 raw "$APP/Info.plist" | grep -q _fppd._udp
+          lipo -info "$APP/Runner"
+          lipo -info "$APP/Frameworks/App.framework/App" | grep -q arm64
+          test -f "$APP/Frameworks/App.framework/flutter_assets/assets/oui-data.json" \
+            || find "$APP" -name oui-data.json | grep -q .
+          echo "--- code signature (expected: none / ad-hoc only, so AltStore/Sideloadly can re-sign) ---"
+          codesign -dv "$APP" 2>&1 || true
+          ls -l "$GITHUB_WORKSPACE/mobile/dist/"
+      - name: Build simulator app
+        run: |
+          set -e
+          flutter build ios --simulator --debug
+          V=${{ steps.ver.outputs.version }}
+          ditto -c -k --sequesterRsrc --keepParent build/ios/iphonesimulator/Runner.app "dist/fpp-finder-$V-ios-simulator.app.zip"
+      - name: Simulator smoke test (install, launch, screenshot)
+        continue-on-error: true
+        run: |
+          set -x
+          DEV=$(xcrun simctl list devices available | grep -E "iPhone" | head -1 | sed -E 's/.*\(([0-9A-F-]{36})\).*/\1/')
+          xcrun simctl boot "$DEV"
+          xcrun simctl bootstatus "$DEV" -b
+          xcrun simctl install "$DEV" build/ios/iphonesimulator/Runner.app
+          # FPP_NO_AUTOSCAN: do not sweep the CI runner's network
+          SIMCTL_CHILD_FPP_NO_AUTOSCAN=1 xcrun simctl launch "$DEV" dev.fppfinder.fppFinder
+          sleep 15
+          xcrun simctl io "$DEV" screenshot dist/ios-simulator-screenshot.png
+          xcrun simctl spawn "$DEV" launchctl list | grep -i fppfinder
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fpp-finder-ios
+          path: |
+            mobile/dist/*.ipa
+            mobile/dist/*.app.zip
+            mobile/dist/ios-simulator-screenshot.png
+          if-no-files-found: error

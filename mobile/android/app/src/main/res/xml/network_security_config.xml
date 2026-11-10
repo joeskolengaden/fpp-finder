@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- FPP controllers serve their API and web UI over plain HTTP on the LAN, and
+     LAN addresses cannot be listed as domains, so cleartext is allowed. The app
+     only ever talks to addresses inside the phone's own Wi-Fi subnet. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system"/>
+        </trust-anchors>
+    </base-config>
+</network-security-config>
