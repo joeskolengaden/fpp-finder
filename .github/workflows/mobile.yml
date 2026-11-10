@@ -6,7 +6,7 @@ name: Build FPP Finder mobile
 
 on:
   push:
-    branches: [main, mobile-ci]
+    branches: [main]
     tags: ['v*']
     paths: ['mobile/**', '.github/workflows/mobile.yml']
   pull_request:
