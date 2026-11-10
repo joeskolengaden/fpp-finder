@@ -1,0 +1,5 @@
+
+Schnittstelle: 192.168.0.5 --- 0x7
+  Internetadresse       Physische Adresse     Typ
+  192.168.0.1           c0-c1-c0-aa-bb-cc     dynamisch
+  192.168.0.20          24-0a-c4-11-22-33     dynamisch

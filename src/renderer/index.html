@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FPP Finder</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <div class="brand"><span class="logo">❄</span><h1>FPP Finder</h1><span class="sub">local-network device scanner</span></div>
+  <div class="controls">
+    <input id="search" type="search" placeholder="Filter IP, name, MAC, vendor…" spellcheck="false">
+    <label class="tog"><input id="fppOnly" type="checkbox"> FPP only</label>
+    <label class="tog"><input id="pinFpp" type="checkbox" checked> Pin FPP on top</label>
+    <label class="tog"><input id="showOffline" type="checkbox" checked> Show offline</label>
+    <label class="tog">Auto-rescan
+      <select id="interval">
+        <option value="0">Off</option><option value="15">15 s</option><option value="30">30 s</option>
+        <option value="60" selected>1 min</option><option value="120">2 min</option><option value="300">5 min</option>
+      </select>
+    </label>
+    <button id="rescan" class="primary">Rescan</button>
+  </div>
+</header>
+<div id="status" class="status"><span id="statusText">Starting…</span><div id="bar"><i id="barFill"></i></div></div>
+<div id="warn" class="warn" hidden></div>
+<div id="ifaces" class="ifaces"></div>
+<main>
+  <table id="tbl">
+    <thead><tr>
+      <th class="c-flags"></th>
+      <th data-sort="ip">IP address</th>
+      <th data-sort="hostname">Hostname</th>
+      <th data-sort="mac">MAC</th>
+      <th data-sort="vendor">Vendor</th>
+      <th>Open ports</th>
+      <th data-sort="firstSeen">First seen</th>
+      <th data-sort="lastSeen" class="sorted">Last seen ▾</th>
+      <th class="c-act"></th>
+    </tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+  <div id="empty" class="empty" hidden>No devices to show.</div>
+</main>
+<footer id="foot">Read-only: only ARP reads, TCP connects and HTTP GETs. Nothing is ever written to a device.</footer>
+<script src="renderer.js"></script>
+</body>
+</html>

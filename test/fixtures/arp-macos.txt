@@ -1,0 +1,7 @@
+? (10.213.125.1) at (incomplete) on en0 ifscope [ethernet]
+? (10.213.125.112) at 12:5a:ae:ea:9:63 on en0 ifscope permanent [ethernet]
+? (10.213.125.230) at b2:c5:e5:4c:f4:b7 on en0 ifscope [ethernet]
+? (10.213.125.255) at ff:ff:ff:ff:ff:ff on en0 ifscope [ethernet]
+fpp.local (169.254.9.67) at 4:23:22:aa:bb:cc on en5 [ethernet]
+mdns.mcast.net (224.0.0.251) at 1:0:5e:0:0:fb on en0 ifscope permanent [ethernet]
+? (239.255.255.250) at 1:0:5e:7f:ff:fa on en5 ifscope permanent [ethernet]

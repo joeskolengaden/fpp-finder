@@ -1,0 +1,60 @@
+{
+  "name": "fpp-finder",
+  "version": "1.0.0",
+  "description": "Finds devices on the local network and highlights Falcon Player (FPP) controllers",
+  "main": "src/main.js",
+  "private": true,
+  "license": "MIT",
+  "author": "WinterLights",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test \"test/*.test.js\"",
+    "scan": "node scripts/scan-cli.js",
+    "build:oui": "node scripts/build-oui.js",
+    "dist:mac": "electron-builder --mac zip dmg --publish never",
+    "dist:win": "electron-builder --win zip --x64 --publish never",
+    "dist": "electron-builder --publish never"
+  },
+  "dependencies": {
+    "multicast-dns": "^7.2.5"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.winterlights.fppfinder",
+    "productName": "FPP Finder",
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "mac": {
+      "category": "public.app-category.utilities",
+      "target": [
+        "zip",
+        "dmg"
+      ],
+      "extendInfo": {
+        "NSLocalNetworkUsageDescription": "FPP Finder scans your local network (read-only) to find Falcon Player (FPP) controllers and other devices.",
+        "NSBonjourServices": [
+          "_http._tcp",
+          "_fppd._udp",
+          "_wled._tcp"
+        ]
+      }
+    },
+    "win": {
+      "target": [
+        "zip"
+      ],
+      "signAndEditExecutable": false
+    },
+    "dmg": {
+      "sign": false
+    }
+  }
+}
